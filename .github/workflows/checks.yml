@@ -1,0 +1,28 @@
+name: Build, security, and correctness
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '0 2 * * 1'
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+      - run: npm audit --audit-level=moderate
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install -r backend/requirements.lock.txt
+      - run: mkdir -p .tmp
+      - run: python -m pytest backend -q
+      - run: pip-audit -r backend/requirements.lock.txt
