@@ -10,4 +10,4 @@ node_modules/
 backend/.env*
 backups/
 docs/dashboard-preview.jpg
-assets/
+/assets/

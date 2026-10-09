@@ -13,6 +13,8 @@ backend/.env
 .vercel/
 !.env.example
 !backend/.env.example
+.agents/
+skills-lock.json
 backups/
 *.tsbuildinfo
 .npm-cache/
