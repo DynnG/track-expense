@@ -3,15 +3,16 @@ import { Eye, EyeOff, LockKeyhole } from 'lucide-react';
 import { api } from './api';
 import { Modal } from './components';
 import type { Profile } from './types';
-export default function Auth({ close, success }: { close: () => void; success: (profile: Profile) => void }) {
+export default function Auth({ close, success, standalone = false }: { standalone?: boolean; close: () => void; success: (profile: Profile) => void }) {
   const [mode, setMode] = useState<'login' | 'register' | 'reset'>('login');
   const [google, setGoogle] = useState<boolean | null>(null);
   useEffect(() => { let active = true; api<{ google: boolean }>('/auth/providers').then(p => { if (active) setGoogle(p.google); }).catch(() => { if (active) setGoogle(false); }); return () => { active = false; }; }, []);
   const [name, setName] = useState(''); const [email, setEmail] = useState(''); const [password, setPassword] = useState(''); const [token, setToken] = useState('');
   const [visible, setVisible] = useState(false); const [error, setError] = useState(''); const [busy, setBusy] = useState(false); const [notice, setNotice] = useState('');
   function change(next: typeof mode) { setMode(next); setError(''); setNotice(''); setPassword(''); }
-  return <Modal title={mode === 'register' ? 'Make room for better money habits' : mode === 'reset' ? 'Reset your password' : 'Welcome back'} close={close}>
-    <p className="muted">{mode === 'reset' ? 'Enter the recovery token supplied by your administrator.' : 'Your records stay separate from the sample workspace.'}</p>
+  const title = mode === 'register' ? 'Make room for better money habits' : mode === 'reset' ? 'Reset your password' : 'Welcome back';
+  const content = <>
+    <p className="muted">{mode === 'reset' ? 'Enter the recovery token supplied by your administrator.' : 'Sign in to access your personal workspace.'}</p>
     {mode !== 'reset' && <div className="segmented"><button aria-pressed={mode === 'login'} className={mode === 'login' ? 'active' : ''} onClick={() => change('login')}>Sign in</button><button aria-pressed={mode === 'register'} className={mode === 'register' ? 'active' : ''} onClick={() => change('register')}>Create account</button></div>}
     {mode !== 'reset' && <div className="social-auth"><button className="button google-button full-width" disabled={!google || busy} onClick={() => { setBusy(true); location.assign('/api/v1/auth/google/start'); }}><span aria-hidden="true" className="google-letter">G</span>Continue with Google</button><p className="field-hint">{google === null ? 'Checking sign-in options…' : google ? 'Google handles your password. Only your name and email are requested.' : 'Google sign-in needs to be enabled by the administrator.'}</p><div className="auth-divider">or use email</div></div>}
     <form onSubmit={async e => { e.preventDefault(); setError(''); setBusy(true); try {
@@ -25,5 +26,6 @@ export default function Auth({ close, success }: { close: () => void; success: (
       <button className="button primary full-width" disabled={busy}>{busy ? 'Please wait…' : mode === 'register' ? 'Create account' : mode === 'reset' ? 'Update password' : 'Sign in'}</button>
       <button type="button" className="text-button recovery" onClick={() => change(mode === 'reset' ? 'login' : 'reset')}>{mode === 'reset' ? 'Back to sign in' : 'Have an account recovery token?'}</button>
     </form><p className="security-note"><LockKeyhole size={14} />Your password is hashed. Sessions stay in secure cookies.</p>
-  </Modal>;
+  </>;
+  return standalone ? <section className="panel auth-card" aria-label={title}><h2>{title}</h2>{content}</section> : <Modal title={title} close={close}>{content}</Modal>;
 }

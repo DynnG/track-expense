@@ -1,6 +1,6 @@
 # Track Expense
 
-A React + TypeScript expense tracker with a FastAPI API, peso accounting, budgets, monthly charts, and the supplied mascot. The interface combines subtle neumorphic controls with frosted panels. The sample workspace uses fictional records held in memory; it never stores real account records in browser storage.
+A React + TypeScript expense tracker with a FastAPI API, peso accounting, budgets, monthly charts, and the supplied mascot. The interface combines subtle neumorphic controls with frosted panels. Users must sign in before accessing the workspace; financial records are stored on the server.
 
 ## Run locally (Windows)
 
@@ -24,7 +24,7 @@ $env:FRONTEND_ORIGIN = 'http://127.0.0.1:5176'
 npm.cmd run dev -- --port 5176 --strictPort
 ```
 
-Explore the sample workspace, or select **Sign in / create account**. New accounts begin empty. Development records persist in the ignored `track_expense.db` file. Local SQLite is a development convenience; production requires PostgreSQL.
+Sign in or create an account on the entry page. New accounts begin empty. Development records persist in the ignored `track_expense.db` file. Local SQLite is a development convenience; production requires PostgreSQL.
 
 ## Implemented
 
