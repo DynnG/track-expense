@@ -23,5 +23,11 @@ test-results/
 
 .vercel
 .env*
+mobile/.expo/
+mobile/dist/
+mobile/android/
+mobile/ios/
+*.apk
+*.aab
 !.env.example
 !backend/.env.example

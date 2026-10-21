@@ -11,3 +11,4 @@ backend/.env*
 backups/
 docs/dashboard-preview.jpg
 /assets/
+/mobile/

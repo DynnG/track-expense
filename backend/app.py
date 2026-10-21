@@ -165,6 +165,12 @@ async def security(request: Request, call_next):
     request_id = uid()
     start = time.monotonic()
     response = None
+    path = request.url.path
+    native_login = path in ('/api/v1/mobile/auth/login', '/api/v1/mobile/auth/register')
+    native_write = path == '/api/v1/mobile/auth/logout' or any(path == base or path.startswith(base + '/') for base in ('/api/v1/transactions', '/api/v1/budgets'))
+    # Native clients have no browser Origin. Only dedicated login endpoints and
+    # bearer-protected financial writes are exempt; cookie writes stay unchanged.
+    native = request.headers.get('origin') is None and (native_login or (native_write and request.headers.get('authorization', '').startswith('Bearer ')))
     try:
         if int(request.headers.get('content-length', '0')) > 16384:
             response = JSONResponse({'error': {'code': 'BODY_TOO_LARGE', 'message': 'Request is too large.'}}, status_code=413)
@@ -174,7 +180,7 @@ async def security(request: Request, call_next):
             response = JSONResponse({'error': {'code': 'ORIGIN_REJECTED', 'message': 'Request origin is not allowed.'}}, status_code=403)
         elif request.method in ('POST', 'PATCH', 'PUT') and request.headers.get('content-type', '').split(';')[0] != 'application/json':
             response = JSONResponse({'error': {'code': 'CONTENT_TYPE', 'message': 'Use application/json.'}}, status_code=415)
-        elif PRODUCTION and request.method in ('POST', 'PATCH', 'PUT', 'DELETE') and request.headers.get('origin') != ORIGIN:
+        elif PRODUCTION and request.method in ('POST', 'PATCH', 'PUT', 'DELETE') and request.headers.get('origin') != ORIGIN and not native:
             response = JSONResponse({'error': {'code': 'ORIGIN_REQUIRED', 'message': 'Request origin is required.'}}, status_code=403)
         else:
             response = await call_next(request)
@@ -201,20 +207,25 @@ async def database_error(request, exc):
     return JSONResponse({'error': {'code': 'SERVICE_UNAVAILABLE', 'message': 'Your data is temporarily unavailable. Please retry.'}}, status_code=503)
 
 def auth(request: Request, session: Session = Depends(db)):
-    token = request.cookies.get('track_session', '')
-    current = session.get(LoginSession, digest(token)) if token else None
+    authorization = request.headers.get('authorization')
+    native = authorization is not None
+    token = authorization[7:] if authorization and authorization.startswith('Bearer ') else '' if native else request.cookies.get('track_session', '')
+    # Separate hash namespaces prevent a web cookie from becoming a CSRF-exempt
+    # bearer credential, or a native token from being accepted as a web cookie.
+    current = session.get(LoginSession, digest(('native:' if native else '') + token)) if token and len(token) <= 128 else None
     now = int(time.time())
     if current is None or now - current.touched > 1800 or now - current.created > 604800:
         if current:
             session.delete(current)
             session.commit()
         raise HTTPException(401, 'Please sign in to continue.')
-    if request.method in ('POST', 'PUT', 'PATCH', 'DELETE') and not secrets.compare_digest(request.headers.get('X-CSRF-Token', ''), current.csrf):
+    if not native and request.method in ('POST', 'PUT', 'PATCH', 'DELETE') and not secrets.compare_digest(request.headers.get('X-CSRF-Token', ''), current.csrf):
         raise HTTPException(403, 'Your security token expired. Reload and try again.')
     throttle(session, 'api:' + current.user_id, 120, 60)
     current.touched = now
     session.commit()
     request.state.login_session = current
+    request.state.native_session = native
     return session.get(User, current.user_id)
 
 def audit(session, user_id, action):
@@ -277,18 +288,19 @@ def month_bounds(month):
 def profile(user, current):
     return {'id': user.id, 'name': user.name, 'email': user.email, 'csrf': current.csrf}
 
-def new_session(session, user, response, old_token=''):
+def new_session(session, user, response, old_token='', native=False):
     if old_token:
         session.execute(delete(LoginSession).where(LoginSession.token_hash == digest(old_token)))
     token = secrets.token_urlsafe(48)
-    current = LoginSession(token_hash=digest(token), user_id=user.id, csrf=secrets.token_urlsafe(32), created=int(time.time()), touched=int(time.time()))
+    current = LoginSession(token_hash=digest(('native:' if native else '') + token), user_id=user.id, csrf=secrets.token_urlsafe(32), created=int(time.time()), touched=int(time.time()))
     session.add(current)
     session.commit()
+    if native:
+        return {'access_token': token, 'token_type': 'Bearer', 'profile': {'id': user.id, 'name': user.name, 'email': user.email}, 'expires_in': 604800, 'idle_timeout': 1800}
     response.set_cookie('track_session', token, httponly=True, secure=PRODUCTION, samesite='lax', max_age=604800, path='/')
     return profile(user, current)
 
-@app.post('/api/v1/auth/register', status_code=201)
-def register(data: RegisterInput, request: Request, response: Response, session: Session = Depends(db)):
+def create_account(data, request, response, session, native=False):
     throttle(session, 'register:' + request.client.host, 5, 3600)
     email = str(data.email).lower()
     if session.scalar(select(User).where(User.email == email)):
@@ -299,10 +311,9 @@ def register(data: RegisterInput, request: Request, response: Response, session:
     for name, kind in DEFAULTS:
         session.add(Category(user_id=user.id, name=name, type=kind))
     audit(session, user.id, 'account_created')
-    return new_session(session, user, response, request.cookies.get('track_session', ''))
+    return new_session(session, user, response, '' if native else request.cookies.get('track_session', ''), native=native)
 
-@app.post('/api/v1/auth/login')
-def login(data: LoginInput, request: Request, response: Response, session: Session = Depends(db)):
+def authenticate_account(data, request, response, session, native=False):
     email = str(data.email).lower()
     throttle(session, 'login-ip:' + request.client.host, 15, 900)
     throttle(session, 'login-account:' + email, 5, 900)
@@ -318,18 +329,42 @@ def login(data: LoginInput, request: Request, response: Response, session: Sessi
     if hasher.check_needs_rehash(user.password_hash):
         user.password_hash = hasher.hash(data.password)
     audit(session, user.id, 'login_success')
-    return new_session(session, user, response, request.cookies.get('track_session', ''))
+    return new_session(session, user, response, '' if native else request.cookies.get('track_session', ''), native=native)
+
+@app.post('/api/v1/auth/register', status_code=201)
+def register(data: RegisterInput, request: Request, response: Response, session: Session = Depends(db)):
+    return create_account(data, request, response, session)
+
+@app.post('/api/v1/auth/login')
+def login(data: LoginInput, request: Request, response: Response, session: Session = Depends(db)):
+    return authenticate_account(data, request, response, session)
+
+@app.post('/api/v1/mobile/auth/register', status_code=201)
+def mobile_register(data: RegisterInput, request: Request, response: Response, session: Session = Depends(db)):
+    return create_account(data, request, response, session, native=True)
+
+@app.post('/api/v1/mobile/auth/login')
+def mobile_login(data: LoginInput, request: Request, response: Response, session: Session = Depends(db)):
+    return authenticate_account(data, request, response, session, native=True)
+
+@app.get('/api/v1/mobile/auth/me')
+def mobile_me(request: Request, user=Depends(auth)):
+    if not request.state.native_session:
+        raise HTTPException(401, 'Please sign in on this device.')
+    return {'id': user.id, 'name': user.name, 'email': user.email}
 
 @app.get('/api/v1/auth/me')
 def me(request: Request, user=Depends(auth)):
     return profile(user, request.state.login_session)
 
 @app.post('/api/v1/auth/logout', status_code=204)
+@app.post('/api/v1/mobile/auth/logout', status_code=204)
 def logout(request: Request, response: Response, user=Depends(auth), session: Session = Depends(db)):
     session.delete(request.state.login_session)
     audit(session, user.id, 'logout')
     session.commit()
-    response.delete_cookie('track_session', path='/')
+    if not request.state.native_session:
+        response.delete_cookie('track_session', path='/')
 
 class ResetInput(StrictModel):
     token: str = Field(min_length=20, max_length=128)

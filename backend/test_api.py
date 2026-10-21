@@ -198,3 +198,67 @@ def test_transaction_pagination_filters_and_stable_date_order():
         assert first['items'][0]['transaction_date'] == '2026-10-12'
         assert not ({t['id'] for t in first['items']} & {t['id'] for t in second['items']})
         assert client.get('/api/v1/transactions?month=2026-10&search=Expense%2012&type=EXPENSE').json()['total'] == 1
+
+def test_native_and_web_share_records_with_separate_session_transports():
+    with TestClient(app) as web, TestClient(app) as phone:
+        web_headers = account(web)
+        login = phone.post('/api/v1/mobile/auth/login', json={'email': 'one@example.com', 'password': 'VeryGoodPass123!'})
+        assert login.status_code == 200 and 'set-cookie' not in login.headers
+        token = login.json()['access_token']
+        headers = {'Authorization': 'Bearer ' + token}
+        assert phone.get('/api/v1/mobile/auth/me', headers=headers).json()['id'] == web.get('/api/v1/auth/me').json()['id']
+        c = category(web)
+        data = {'type': 'EXPENSE', 'category_id': c, 'amount': '0.30', 'description': 'From phone', 'transaction_date': '2026-10-21'}
+        created = phone.post('/api/v1/transactions', headers=headers, json=data)
+        assert created.status_code == 201
+        identifier = created.json()['id']
+        assert web.get('/api/v1/transactions?month=2026-10').json()['items'][0]['id'] == identifier
+        assert web.patch('/api/v1/transactions/' + identifier, headers=web_headers, json={**data, 'amount': '0.40'}).status_code == 200
+        assert phone.get('/api/v1/reports/monthly?month=2026-10', headers=headers).json()['expense'] == '0.40'
+        assert phone.post('/api/v1/budgets', headers=headers, json={'month': '2026-10', 'amount': '100.00'}).status_code == 200
+        assert web.get('/api/v1/budgets?month=2026-10').json()[0]['amount'] == '100.00'
+        assert phone.delete('/api/v1/transactions/' + identifier, headers=headers).status_code == 204
+        assert web.get('/api/v1/reports/monthly?month=2026-10').json()['expense'] == '0.00'
+        assert phone.post('/api/v1/mobile/auth/logout', headers=headers, json={}).status_code == 204
+        assert phone.get('/api/v1/mobile/auth/me', headers=headers).status_code == 401
+        assert web.get('/api/v1/auth/me').status_code == 200
+
+def test_native_token_cannot_cross_accounts_or_be_substituted_for_web_cookie():
+    with TestClient(app) as a, TestClient(app) as b:
+        web_headers = account(a)
+        tx = transaction(a, web_headers).json()
+        account(b, 'two@example.com')
+        login = b.post('/api/v1/mobile/auth/login', json={'email': 'two@example.com', 'password': 'VeryGoodPass123!'})
+        token = login.json()['access_token']
+        headers = {'Authorization': 'Bearer ' + token}
+        assert b.get('/api/v1/transactions/' + tx['id'], headers=headers).status_code == 404
+        assert b.delete('/api/v1/transactions/' + tx['id'], headers=headers).status_code == 404
+        assert b.get('/api/v1/reports/monthly?month=2026-10', headers=headers).json()['count'] == 0
+        web_cookie = a.cookies.get('track_session')
+        assert a.get('/api/v1/auth/me', headers={'Authorization': 'Bearer ' + web_cookie}).status_code == 401
+        assert a.get('/api/v1/auth/me', headers={'Authorization': 'Bearer invalid'}).status_code == 401
+        assert a.get('/api/v1/mobile/auth/me').status_code == 401
+        with TestClient(app) as cookie_only:
+            cookie_only.cookies.set('track_session', token)
+            assert cookie_only.get('/api/v1/auth/me').status_code == 401
+        with Session(engine) as db:
+            native = db.get(LoginSession, digest('native:' + token))
+            native.touched -= 1801
+            db.commit()
+        assert b.get('/api/v1/mobile/auth/me', headers=headers).status_code == 401
+
+def test_production_native_origin_exception_does_not_weaken_browser_csrf(monkeypatch):
+    import backend.app as server
+    monkeypatch.setattr(server, 'PRODUCTION', True)
+    with TestClient(app, base_url='https://testserver') as web, TestClient(app, base_url='https://testserver') as phone:
+        data = {'name': 'Phone', 'email': 'phone@example.com', 'password': 'VeryGoodPass123!'}
+        created = phone.post('/api/v1/mobile/auth/register', json=data)
+        assert created.status_code == 201
+        headers = {'Authorization': 'Bearer ' + created.json()['access_token']}
+        assert phone.post('/api/v1/budgets', headers=headers, json={'month': '2026-10', 'amount': '10.00'}).status_code == 200
+        assert phone.post('/api/v1/budgets', headers={**headers, 'Origin': 'https://evil.example'}, json={'month': '2026-10', 'amount': '10.00'}).status_code == 403
+        assert web.post('/api/v1/auth/login', json={'email': data['email'], 'password': data['password']}).status_code == 403
+        login = web.post('/api/v1/auth/login', headers={'Origin': server.ORIGIN}, json={'email': data['email'], 'password': data['password']})
+        assert login.status_code == 200
+        assert web.post('/api/v1/budgets', headers={'X-CSRF-Token': login.json()['csrf']}, json={'month': '2026-10', 'amount': '11.00'}).status_code == 403
+        assert web.post('/api/v1/budgets', headers={'Origin': server.ORIGIN}, json={'month': '2026-10', 'amount': '11.00'}).status_code == 403
