@@ -1,4 +1,4 @@
-import { Component, useEffect, useRef, useState, type ReactNode } from 'react';
+import { memo, Component, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useForm } from 'react-hook-form';
 import { AlertCircle, Check, ChevronLeft, ChevronRight, Coffee, GraduationCap, Heart, House, MoreHorizontal, Plus, ReceiptText, ShoppingBag, TrainFront, Trash2, Wallet, X } from 'lucide-react';
 import type { Budget, Category, Kind, Transaction } from './types';
@@ -53,7 +53,7 @@ export function ConfirmDelete({ title, text, remove, close }: { title: string; t
   const [busy, setBusy] = useState(false); const [error, setError] = useState('');
   return <Modal title={title} close={close}><p>{text}</p><p className="muted">This cannot be undone.</p>{error && <p role="alert" className="form-error">{error}</p>}<div className="modal-footer"><button className="button" onClick={close}>Keep it</button><button className="button danger" disabled={busy} onClick={async () => { setBusy(true); try { await remove(); close(); } catch (e) { setError((e as Error).message); setBusy(false); } }}><Trash2 size={16} />{busy ? 'Deleting…' : 'Delete'}</button></div></Modal>;
 }
-export function TransactionTable({ items, categories, edit, remove, compact = false }: { items: Transaction[]; categories: Category[]; edit: (item: Transaction) => void; remove: (item: Transaction) => void; compact?: boolean }) {
+export const TransactionTable = memo(function TransactionTable({ items, categories, edit, remove, compact = false }: { items: Transaction[]; categories: Category[]; edit: (item: Transaction) => void; remove: (item: Transaction) => void; compact?: boolean }) {
   const [menu, setMenu] = useState('');
   const root = useRef<HTMLDivElement>(null);
   useEffect(() => { const outside = (e: PointerEvent) => { if (!root.current?.contains(e.target as Node)) setMenu(''); }; const escape = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenu(''); }; document.addEventListener('pointerdown', outside); document.addEventListener('keydown', escape); return () => { document.removeEventListener('pointerdown', outside); document.removeEventListener('keydown', escape); }; }, []);
@@ -62,6 +62,6 @@ export function TransactionTable({ items, categories, edit, remove, compact = fa
     const name = categories.find(c => c.id === t.category_id)?.name ?? 'Other';
     return <tr key={t.id}><td><div className="transaction-name"><CategoryIcon name={name} /><div><strong>{t.description || name}</strong><span>{t.type === 'INCOME' ? 'Income' : 'Expense'}</span></div></div></td><td className="category-column"><span className="category-tag">{name}</span></td><td className="date-cell">{new Date(`${t.transaction_date}T12:00:00`).toLocaleDateString('en-PH', { month: 'short', day: 'numeric' })}</td><td className={`align-right amount ${t.type === 'INCOME' ? 'positive' : ''}`}>{t.type === 'INCOME' ? '+' : '−'}{peso(t.amount)}</td><td className="action-cell"><button className="icon-button" aria-label={`Actions for ${t.description || name}`} aria-expanded={menu === t.id} onClick={() => setMenu(menu === t.id ? '' : t.id)}><MoreHorizontal size={20} /></button>{menu === t.id && <div className="action-menu"><button onClick={() => { setMenu(''); edit(t); }}>Edit transaction</button><button className="danger-text" onClick={() => { setMenu(''); remove(t); }}>Delete transaction</button></div>}</td></tr>;
   })}</tbody></table></div>;
-}
+});
 export function Toast({ message }: { message: string }) { return <div className="toast" role="status"><Check size={18} />{message}</div>; }
 export function AddButton({ action, children = 'Add transaction' }: { action: () => void; children?: ReactNode }) { return <button className="button primary" onClick={action}><Plus size={18} />{children}</button>; }

@@ -1,10 +1,9 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowDownLeft, ArrowUpRight, Bell, ChevronLeft, ChevronRight, Download, LayoutDashboard, LogOut, Menu, PiggyBank, Plus, ReceiptText, Search, Settings, ShieldCheck, Sparkles, TrendingUp, Wallet, X, ChartNoAxesCombined } from 'lucide-react';
 import Auth from './Auth';
-import GoogleConnection from './GoogleConnection';
 import { AddButton, BudgetForm, CategoryIcon, ConfirmDelete, Empty, ErrorBoundary, Modal, MonthPicker, Toast, TransactionForm, TransactionTable } from './components';
-import { api, ApiError, downloadReport, setSession } from './api';
+import { api, ApiError, downloadReport, setSession, transactionInput } from './api';
 import { cents, localDate, monthLabel, peso } from './money';
 import type { Budget, Category, Page, Profile, Report, Transaction } from './types';
 const TrendChart = lazy(() => import('./Charts').then(m => ({ default: m.TrendChart })));
@@ -18,6 +17,11 @@ const NAV = [
 const titles: Record<Page, string> = { dashboard: 'A little clarity. A lot of progress.', transactions: 'Every peso, accounted for.', budgets: 'Give your money a plan.', reports: 'See the bigger picture.', settings: 'Your workspace.' };
 const validPages: Page[] = ['dashboard', 'transactions', 'budgets', 'reports', 'settings'];
 const hashPage = (): Page => { const candidate = location.hash.slice(1) as Page; return validPages.includes(candidate) ? candidate : 'dashboard'; };
+const EMPTY_TRANSACTIONS: Transaction[] = [];
+const EMPTY_CATEGORIES: Category[] = [];
+const EMPTY_BUDGETS: Budget[] = [];
+const EMPTY_BREAKDOWN: Report['breakdown'] = [];
+
 type TxPage = { items: Transaction[]; total: number; page: number };
 
 export default function App() {
@@ -43,14 +47,6 @@ export default function App() {
   const [search, setSearch] = useState(''); const [searchInput, setSearchInput] = useState('');
   const [categoryFilter, setCategoryFilter] = useState(''); const [typeFilter, setTypeFilter] = useState(''); const [pageNumber, setPageNumber] = useState(1);
   const [toast, setToast] = useState(''); const [globalError, setGlobalError] = useState('');
-  useEffect(() => {
-    const params = new URLSearchParams(location.search);
-    const code = params.get('auth_error');
-    const messages: Record<string, string> = { invalid_flow: 'This Google sign-in expired or could not be verified. Please try again.', cancelled: 'Google sign-in was cancelled. You can try again or use email.', verification_failed: 'We could not verify your Google account. Please try again.', account_exists: 'Sign in with your existing password, then connect Google in Settings.', already_connected: 'This Google account is already connected to an account.' };
-    if (code) { setGlobalError(messages[code] ?? 'Google sign-in could not be completed.'); }
-    if (params.get('google_linked') === '1') setToast('Google account connected.');
-    if (code || params.has('google_linked')) { params.delete('auth_error'); params.delete('google_linked'); const query = params.toString(); history.replaceState(null, '', location.pathname + (query ? '?' + query : '') + location.hash); }
-  }, []);
   useEffect(() => { const timer = setTimeout(() => { setSearch(searchInput); setPageNumber(1); }, 300); return () => clearTimeout(timer); }, [searchInput]);
   useEffect(() => { if (!toast) return; const timer = setTimeout(() => setToast(''), 4000); return () => clearTimeout(timer); }, [toast]);
   useEffect(() => { const onHash = () => { setPage(hashPage()); setMobileOpen(false); }; window.addEventListener('hashchange', onHash); return () => window.removeEventListener('hashchange', onHash); }, []);
@@ -59,39 +55,38 @@ export default function App() {
   function changeMonth(next: string) { setMonth(next); setPageNumber(1); }
   const enabled = checked && !!profile;
   const scope = profile?.id ?? 'signed-out';
-  const categoriesQuery = useQuery({ queryKey: ['categories', scope], queryFn: () => api<Category[]>('/categories'), enabled });
-  const budgetsQuery = useQuery({ queryKey: ['budgets', scope, month], queryFn: () => api<Budget[]>(`/budgets?month=${month}`), enabled });
-  const reportQuery = useQuery({ queryKey: ['report', scope, month], queryFn: () => api<Report>(`/reports/monthly?month=${month}`), enabled });
-  const breakdownQuery = useQuery({ queryKey: ['breakdown', scope, month], queryFn: () => api<{ category_id: string; amount: string }[]>(`/reports/categories?month=${month}`), enabled });
-  const transactionsQuery = useQuery({ queryKey: ['transactions', scope, month, categoryFilter, typeFilter, search, pageNumber], queryFn: () => api<TxPage>(`/transactions?${new URLSearchParams({ month, category_id: categoryFilter, type: typeFilter, search, page: String(pageNumber), page_size: '10' })}`), enabled: enabled && page === 'transactions' });
-  const recentQuery = useQuery({ queryKey: ['recent', scope, month], queryFn: () => api<TxPage>(`/transactions?month=${month}&page_size=5`), enabled: enabled && page === 'dashboard' });
-  const categories = categoriesQuery.data ?? [];
-  const budgets = budgetsQuery.data ?? [];
+  const categoriesQuery = useQuery({ queryKey: ['categories', scope], queryFn: ({ signal }) => api<Category[]>('/categories', { signal }), enabled });
+  const budgetsQuery = useQuery({ queryKey: ['budgets', scope, month], queryFn: ({ signal }) => api<Budget[]>(`/budgets?month=${month}`, { signal }), enabled });
+  const reportQuery = useQuery({ queryKey: ['report', scope, month], queryFn: ({ signal }) => api<Report>(`/reports/monthly?month=${month}`, { signal }), enabled });
+  const transactionsQuery = useQuery({ queryKey: ['transactions', scope, month, categoryFilter, typeFilter, search, pageNumber], queryFn: ({ signal }) => api<TxPage>(`/transactions?${new URLSearchParams({ month, category_id: categoryFilter, type: typeFilter, search, page: String(pageNumber), page_size: '10' })}`, { signal }), enabled: enabled && page === 'transactions' });
+  const recentQuery = useQuery({ queryKey: ['recent', scope, month], queryFn: ({ signal }) => api<TxPage>(`/transactions?month=${month}&page_size=5`, { signal }), enabled: enabled && page === 'dashboard' });
+  const categories = categoriesQuery.data ?? EMPTY_CATEGORIES;
+  const budgets = budgetsQuery.data ?? EMPTY_BUDGETS;
   const report = reportQuery.data;
-  const breakdown = breakdownQuery.data ?? [];
-  const transactions = transactionsQuery.data?.items ?? [];
+  const breakdown = report?.breakdown ?? EMPTY_BREAKDOWN;
+  const transactions = transactionsQuery.data?.items ?? EMPTY_TRANSACTIONS;
   const txTotal = transactionsQuery.data?.total ?? 0;
   useEffect(() => { if (transactionsQuery.data) setPageNumber(p => Math.min(p, Math.max(1, Math.ceil(txTotal / 10)))); }, [txTotal, transactionsQuery.data]);
-  const recent = recentQuery.data?.items ?? [];
+  const recent = recentQuery.data?.items ?? EMPTY_TRANSACTIONS;
   const overall = budgets.find(b => !b.category_id);
   const expense = report ? cents(report.expense) : 0;
   const remaining = overall ? cents(overall.amount) - expense : 0;
   const used = overall ? expense / cents(overall.amount) * 100 : 0;
-  const warnings = budgets.map(b => { const spend = b.category_id ? cents(breakdown.find(c => c.category_id === b.category_id)?.amount ?? '0') : expense; return { budget: b, spend, percent: spend / cents(b.amount) * 100, name: b.category_id ? categories.find(c => c.id === b.category_id)?.name ?? 'Category' : 'Overall monthly budget' }; }).filter(b => b.percent >= 80);
-  const dataError = (categoriesQuery.error || budgetsQuery.error || reportQuery.error || breakdownQuery.error || (page === 'transactions' && transactionsQuery.error) || (page === 'dashboard' && recentQuery.error));
+  const warnings = useMemo(() => budgets.map(b => { const spend = b.category_id ? cents(breakdown.find(c => c.category_id === b.category_id)?.amount ?? '0') : expense; return { budget: b, spend, percent: spend / cents(b.amount) * 100, name: b.category_id ? categories.find(c => c.id === b.category_id)?.name ?? 'Category' : 'Overall monthly budget' }; }).filter(b => b.percent >= 80), [budgets, breakdown, categories, expense]);
+  const dataError = (categoriesQuery.error || budgetsQuery.error || reportQuery.error || (page === 'transactions' && transactionsQuery.error) || (page === 'dashboard' && recentQuery.error));
   const loading = !checked || categoriesQuery.isLoading || reportQuery.isLoading || budgetsQuery.isLoading;
-  async function refresh() { await queryClient.invalidateQueries(); }
+  async function refresh(kind?: 'transaction' | 'budget') { const keys = kind === 'transaction' ? ['report', 'recent', 'transactions'] : kind === 'budget' ? ['budgets'] : ['categories', 'budgets', 'report', 'recent', 'transactions']; await queryClient.invalidateQueries({ predicate: q => keys.includes(String(q.queryKey[0])) && q.queryKey[1] === scope }); }
   async function saveTransaction(value: Omit<Transaction, 'id'>, id?: string) {
-    await api(`/transactions${id ? `/${id}` : ''}`, { method: id ? 'PATCH' : 'POST', body: JSON.stringify(value) }); await refresh();
+    await api(`/transactions${id ? `/${id}` : ''}`, { method: id ? 'PATCH' : 'POST', body: JSON.stringify(transactionInput(value)) }); await refresh('transaction');
     setToast(id ? 'Transaction updated.' : 'Transaction added.');
   }
   async function saveBudget(value: Omit<Budget, 'id'>) {
-    await api('/budgets', { method: 'POST', body: JSON.stringify(value) }); await refresh();
+    await api('/budgets', { method: 'POST', body: JSON.stringify(value) }); await refresh('budget');
     setToast('Budget saved.');
   }
   async function removeItem() {
     if (!deleteItem) return;
-    await api(`/${deleteItem.type === 'transaction' ? 'transactions' : 'budgets'}/${deleteItem.item.id}`, { method: 'DELETE' }); await refresh();
+    await api(`/${deleteItem.type === 'transaction' ? 'transactions' : 'budgets'}/${deleteItem.item.id}`, { method: 'DELETE' }); await refresh(deleteItem.type);
     setToast(deleteItem.type === 'transaction' ? 'Transaction deleted.' : 'Budget deleted.');
   }
   async function exportReport() {
@@ -100,7 +95,9 @@ export default function App() {
   function clearWorkspace() { setProfile(null); setSession(null); queryClient.clear(); setTxDialog(null); setBudgetDialog(null); setDeleteItem(null); setNotificationOpen(false); setMobileOpen(false); setToast(''); }
   async function logout() { try { await api('/auth/logout', { method: 'POST', body: '{}' }); clearWorkspace(); setGlobalError(''); } catch (e) { if (e instanceof ApiError && e.status === 401) clearWorkspace(); else setGlobalError((e as Error).message); } }
   function signedIn(p: Profile) { setProfile(p); setSession(p); queryClient.clear(); setGlobalError(''); navigate('dashboard'); setToast('Welcome to your workspace.'); }
-  const transactionActions = { edit: (t: Transaction) => setTxDialog(t), remove: (t: Transaction) => setDeleteItem({ type: 'transaction', item: t }) };
+  const editTransaction = useCallback((t: Transaction) => setTxDialog(t), []);
+  const removeTransaction = useCallback((t: Transaction) => setDeleteItem({ type: 'transaction', item: t }), []);
+  const transactionActions = { edit: editTransaction, remove: removeTransaction };
   function budgetCard(b: Budget) {
     const name = b.category_id ? categories.find(c => c.id === b.category_id)?.name ?? 'Category' : 'Monthly spending';
     const spend = b.category_id ? cents(breakdown.find(c => c.category_id === b.category_id)?.amount ?? '0') : expense;
@@ -119,7 +116,7 @@ export default function App() {
     <main id="main" className="main-content" tabIndex={-1}>
       {globalError && <div className="error-banner" role="alert"><span>{globalError}</span><button aria-label="Dismiss message" className="icon-button" onClick={() => setGlobalError('')}><X size={18} /></button></div>}
       <div className="page-heading"><div><p className="eyebrow">{page === 'dashboard' ? `HELLO${profile ? `, ${profile.name.toUpperCase()}` : ''}` : page.toUpperCase()}</p><h1>{titles[page]}</h1><p className="page-subtitle">{page === 'dashboard' ? 'Your money habits, all in one place.' : page === 'transactions' ? 'Keep track of the money coming in and going out.' : page === 'budgets' ? 'Set realistic limits and stay in control.' : page === 'reports' ? 'Understand your spending, one month at a time.' : 'Manage your account and personal preferences.'}</p></div>{page !== 'settings' && <div className="heading-actions"><MonthPicker month={month} change={changeMonth} />{page === 'budgets' ? <AddButton action={() => setBudgetDialog('new')}>Set budget</AddButton> : page === 'reports' ? <button className="button primary" onClick={exportReport}><Download size={17} />Export CSV</button> : <AddButton action={() => setTxDialog('new')} />}</div>}</div>
-      {dataError ? <div className="panel empty" role="alert"><h2>Your workspace couldn’t load.</h2><p>{(dataError as Error).message}</p><button className="button primary" onClick={refresh}>Try again</button></div> : loading ? <div className="loading-grid" aria-label="Loading workspace" aria-busy="true">{[1, 2, 3, 4].map(i => <div key={i} className="skeleton panel" />)}</div> : <>
+      {dataError ? <div className="panel empty" role="alert"><h2>Your workspace couldn’t load.</h2><p>{(dataError as Error).message}</p><button className="button primary" onClick={() => refresh()}>Try again</button></div> : loading ? <div className="loading-grid" aria-label="Loading workspace" aria-busy="true">{[1, 2, 3, 4].map(i => <div key={i} className="skeleton panel" />)}</div> : <>
       {page === 'dashboard' && report && <>
         <section className="stats-grid" aria-label="Monthly summary">
           <article className="stat-card balance-card"><div className="stat-label"><span>Net balance</span><span className="stat-icon"><Wallet size={19} /></span></div><strong className="stat-value">{peso(report.balance)}</strong><p>Income minus expenses this month</p><span className="balance-decoration" aria-hidden>₱</span></article>
@@ -137,7 +134,7 @@ export default function App() {
       </section>}
       {page === 'budgets' && <>{warnings.length > 0 && <div className="budget-warning"><Bell size={20} /><span>{warnings.length} budget{warnings.length > 1 ? 's are' : ' is'} at 80% or more. A good moment to review your plan.</span></div>}{budgets.length ? <div className="budgets-grid">{[...budgets].sort((a, b) => Number(!!a.category_id) - Number(!!b.category_id)).map(budgetCard)}<button className="add-budget-card" onClick={() => setBudgetDialog('new')}><span><Plus size={24} /></span><strong>Plan another category</strong><p>Make space for what matters.</p></button></div> : <div className="panel"><Empty title="Your plan starts with a limit" text="Set an overall budget, then add limits for individual categories." action={<AddButton action={() => setBudgetDialog('new')}>Set your first budget</AddButton>} /></div>}</>}
       {page === 'reports' && report && <><div className="report-summary"><div className="panel"><span>Total income</span><strong>{peso(report.income)}</strong></div><div className="panel"><span>Total expenses</span><strong>{peso(report.expense)}</strong></div><div className="panel"><span>Net balance</span><strong>{peso(report.balance)}</strong></div></div><div className="reports-charts"><section className="panel"><div className="section-heading"><div><h2>Six months in perspective</h2><p>Income and expenses, side by side</p></div><div className="chart-key"><span><i className="income-dot" />Income</span><span><i />Expenses</span></div></div><Suspense fallback={<div className="skeleton chart" />}><TrendChart report={report} /></Suspense></section><section className="panel"><div className="section-heading"><div><h2>Spending by category</h2><p>{monthLabel(month)}</p></div></div><Suspense fallback={<div className="skeleton chart" />}><CategoryChart categories={categories} breakdown={breakdown} /></Suspense></section></div><section className="panel comparison"><div><span className="comparison-icon"><TrendingUp size={24} /></span><h2>Compared with last month</h2><p>{cents(report.previous.expense) ? `Your spending is ${peso(Math.abs(expense - cents(report.previous.expense)))} ${expense >= cents(report.previous.expense) ? 'higher' : 'lower'} than last month.` : 'Add records for the previous month to see your comparison.'}</p></div><div className="comparison-values"><div><span>Last month</span><strong>{peso(report.previous.expense)}</strong></div><div><span>This month</span><strong>{peso(report.expense)}</strong></div></div></section></>}
-      {page === 'settings' && <div className="settings-grid"><section className="panel settings-card"><ShieldCheck className="settings-icon" /><h2>Account</h2><dl><dt>Name</dt><dd>{profile.name}</dd><dt>Email</dt><dd>{profile.email}</dd><dt>Currency</dt><dd>Philippine peso (PHP)</dd></dl><button className="button" onClick={logout}><LogOut size={17} />Sign out</button><GoogleConnection /></section><section className="panel settings-card"><Wallet className="settings-icon" /><h2>Preferences</h2><dl><dt>Currency</dt><dd>₱ · Philippine peso</dd><dt>Dates</dt><dd>Asia/Manila</dd><dt>Reports</dt><dd>Monthly CSV downloads</dd></dl><button className="button" onClick={() => navigate('reports')}><Download size={17} />View reports</button></section></div>}
+      {page === 'settings' && <div className="settings-grid"><section className="panel settings-card"><ShieldCheck className="settings-icon" /><h2>Account</h2><dl><dt>Name</dt><dd>{profile.name}</dd><dt>Email</dt><dd>{profile.email}</dd><dt>Currency</dt><dd>Philippine peso (PHP)</dd></dl><button className="button" onClick={logout}><LogOut size={17} />Sign out</button></section><section className="panel settings-card"><Wallet className="settings-icon" /><h2>Preferences</h2><dl><dt>Currency</dt><dd>₱ · Philippine peso</dd><dt>Dates</dt><dd>Asia/Manila</dd><dt>Reports</dt><dd>Monthly CSV downloads</dd></dl><button className="button" onClick={() => navigate('reports')}><Download size={17} />View reports</button></section></div>}
       </>}
       <footer className="workspace-footer"><span><span className="footer-mark">₱</span> A little more mindful, every day.</span><span>Made for life in pesos</span></footer>
     </main></div></div>

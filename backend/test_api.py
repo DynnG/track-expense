@@ -12,120 +12,10 @@ from fastapi.testclient import TestClient
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 from backend.app import app, engine, Base, User, Category, Transaction, RateBucket, LoginSession, RecoveryToken, AuditEvent, Budget, digest
-from backend.google_auth import GoogleIdentity, OAuthAttempt
-
-@pytest.fixture
-def google(monkeypatch):
-    import backend.google_auth as provider
-    monkeypatch.setattr(provider, 'CLIENT_ID', 'test-client')
-    monkeypatch.setattr(provider, 'CLIENT_SECRET', 'test-secret')
-    monkeypatch.setattr(provider, 'exchange', lambda code, verifier: 'test-token')
-    monkeypatch.setattr(provider, 'verify', lambda token, nonce: {'sub': 'google-subject', 'email': 'google@example.com', 'name': 'Google tester'})
-    return provider
-
-def google_begin(client):
-    from urllib.parse import parse_qs, urlparse
-    response = client.get('/api/v1/auth/google/start', follow_redirects=False)
-    assert response.status_code == 303
-    query = parse_qs(urlparse(response.headers['location']).query)
-    assert query['scope'] == ['openid email profile']
-    assert query['code_challenge_method'] == ['S256']
-    assert 'HttpOnly' in response.headers['set-cookie']
-    return query['state'][0]
-
-def google_finish(client, state):
-    return client.get('/api/v1/auth/google/callback', params={'state': state, 'code': 'test-code'}, follow_redirects=False)
-
-def test_google_new_returning_session_rotation_and_replay(google):
-    with TestClient(app) as client:
-        state = google_begin(client)
-        assert 'auth_error' not in google_finish(client, state).headers['location']
-        profile = client.get('/api/v1/auth/me').json()
-        assert profile['email'] == 'google@example.com'
-        assert len(client.get('/api/v1/categories').json()) == 10
-        old_cookie = client.cookies.get('track_session')
-        assert 'invalid_flow' in google_finish(client, state).headers['location']
-        state = google_begin(client)
-        assert 'auth_error' not in google_finish(client, state).headers['location']
-        assert client.cookies.get('track_session') != old_cookie
-        assert client.get('/api/v1/auth/me').json()['id'] == profile['id']
-        assert transaction(client, {'X-CSRF-Token': profile['csrf']}).status_code == 403
-
-def test_google_browser_binding_expiry_and_denial(google):
-    with TestClient(app) as client, TestClient(app) as other:
-        state = google_begin(client)
-        assert 'invalid_flow' in google_finish(other, state).headers['location']
-        assert 'invalid_flow' in google_finish(client, 'wrong-state').headers['location']
-        with Session(engine) as session:
-            attempt = session.get(OAuthAttempt, digest(state))
-            attempt.expires = 1
-            session.commit()
-        assert 'invalid_flow' in google_finish(client, state).headers['location']
-        state = google_begin(client)
-        response = client.get('/api/v1/auth/google/callback', params={'state': state, 'error': 'access_denied'}, follow_redirects=False)
-        assert 'cancelled' in response.headers['location']
-        assert client.get('/api/v1/auth/me').status_code == 401
-
-def test_google_email_collision_requires_explicit_csrf_link(google):
-    from urllib.parse import parse_qs, urlparse
-    with TestClient(app) as owner, TestClient(app) as guest:
-        headers = account(owner, 'google@example.com')
-        owner_id = owner.get('/api/v1/auth/me').json()['id']
-        assert 'account_exists' in google_finish(guest, google_begin(guest)).headers['location']
-        assert guest.get('/api/v1/auth/me').status_code == 401
-        assert owner.post('/api/v1/auth/google/link', json={}).status_code == 403
-        link = owner.post('/api/v1/auth/google/link', headers=headers, json={})
-        assert link.status_code == 200
-        state = parse_qs(urlparse(link.json()['url']).query)['state'][0]
-        assert 'google_linked=1' in google_finish(owner, state).headers['location']
-        assert owner.get('/api/v1/auth/google/status').json()['connected']
-        assert 'auth_error' not in google_finish(guest, google_begin(guest)).headers['location']
-        assert guest.get('/api/v1/auth/me').json()['id'] == owner_id
-
-def test_google_link_cannot_survive_logout_or_bind_to_other_session(google):
-    from urllib.parse import parse_qs, urlparse
-    with TestClient(app) as owner:
-        headers = account(owner)
-        link = owner.post('/api/v1/auth/google/link', headers=headers, json={})
-        state = parse_qs(urlparse(link.json()['url']).query)['state'][0]
-        owner.post('/api/v1/auth/logout', headers=headers, json={})
-        assert 'invalid_flow' in google_finish(owner, state).headers['location']
-        with Session(engine) as session:
-            assert session.scalar(select(GoogleIdentity)) is None
-
-def test_google_invalid_identity_fails_closed(google, monkeypatch):
-    def reject(*args):
-        raise ValueError('untrusted identity')
-    monkeypatch.setattr(google, 'verify', reject)
-    with TestClient(app) as client:
-        assert 'verification_failed' in google_finish(client, google_begin(client)).headers['location']
-        assert client.get('/api/v1/auth/me').status_code == 401
-
-def test_google_signed_token_validation(monkeypatch):
-    import time
-    import jwt
-    from types import SimpleNamespace
-    from cryptography.hazmat.primitives.asymmetric import rsa
-    import backend.google_auth as provider
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    monkeypatch.setattr(provider, 'CLIENT_ID', 'test-client')
-    monkeypatch.setattr(provider.JWKS, 'get_signing_key_from_jwt', lambda token: SimpleNamespace(key=key.public_key()))
-    claims = {'iss': 'https://accounts.google.com', 'aud': 'test-client', 'sub': 'subject', 'iat': int(time.time()), 'exp': int(time.time()) + 300, 'nonce': 'expected', 'email': 'verified@example.com', 'email_verified': True}
-    token = lambda values: jwt.encode(values, key, algorithm='RS256', headers={'kid': 'test'})
-    assert provider.verify(token(claims), 'expected')['sub'] == 'subject'
-    for field, value in [('aud', 'other-client'), ('iss', 'https://evil.example'), ('nonce', 'wrong'), ('exp', 1), ('email_verified', False), ('azp', 'other-client')]:
-        with pytest.raises((ValueError, jwt.PyJWTError)):
-            provider.verify(token({**claims, field: value}), 'expected')
-    other_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    with pytest.raises(jwt.PyJWTError):
-        provider.verify(jwt.encode(claims, other_key, algorithm='RS256'), 'expected')
-    with pytest.raises(jwt.PyJWTError):
-        provider.verify(jwt.encode(claims, 'untrusted', algorithm='HS256'), 'expected')
-
-def test_access_logs_redact_oauth_codes():
+def test_access_logs_redact_sensitive_query_parameters():
     import logging
     from backend.app import SafeAccessLog
-    record = logging.LogRecord('uvicorn.access', logging.INFO, '', 0, '%s - "%s %s HTTP/%s" %d', ('client', 'GET', '/api/v1/auth/google/callback?code=secret&state=secret', '1.1', 303), None)
+    record = logging.LogRecord('uvicorn.access', logging.INFO, '', 0, '%s - "%s %s HTTP/%s" %d', ('client', 'GET', '/api/v1/transactions?search=secret', '1.1', 303), None)
     SafeAccessLog().filter(record)
     assert 'secret' not in record.getMessage()
 
@@ -133,7 +23,7 @@ def test_access_logs_redact_oauth_codes():
 def clean():
     Base.metadata.create_all(engine)
     with Session(engine) as db:
-        for model in [GoogleIdentity, OAuthAttempt, Transaction, Budget, LoginSession, RecoveryToken, AuditEvent, Category, RateBucket, User]:
+        for model in [Transaction, Budget, LoginSession, RecoveryToken, AuditEvent, Category, RateBucket, User]:
             db.execute(delete(model))
         db.commit()
 
@@ -249,3 +139,62 @@ def test_health_and_sanitized_errors():
         assert invalid.status_code == 422
         assert 'secret' not in invalid.text
         assert 'X-Request-ID' in invalid.headers
+
+def test_removed_google_routes_and_email_auth_still_work():
+    with TestClient(app) as client:
+        for path in ['/auth/providers', '/auth/google/start', '/auth/google/status', '/auth/google/callback?code=ignored']:
+            assert client.get('/api/v1' + path, follow_redirects=False).status_code == 404
+        assert client.post('/api/v1/auth/google/link', json={}).status_code == 404
+        headers = account(client)
+        assert client.get('/api/v1/auth/me').status_code == 200
+        assert client.post('/api/v1/auth/logout', headers=headers, json={}).status_code == 204
+        assert client.post('/api/v1/auth/login', json={'email': 'one@example.com', 'password': 'VeryGoodPass123!'}).status_code == 200
+
+def test_aggregated_reports_track_edits_deletes_and_month_boundaries():
+    from sqlalchemy import event
+    with TestClient(app) as client:
+        headers = account(client)
+        expense_category = category(client)
+        income_category = category(client, 'INCOME')
+        tx = transaction(client, headers, amount='0.10', date='2026-01-31').json()
+        transaction(client, headers, amount='0.20', date='2026-01-31')
+        transaction(client, headers, amount='5.00', date='2025-12-31')
+        transaction(client, headers, amount='99.00', date='2026-02-01')
+        transaction(client, headers, amount='123.45', date='2025-07-31')
+        transaction(client, headers, amount='1.00', date='2026-01-01', category_id=income_category, type='INCOME')
+        calls = []
+        def count_queries(conn, cursor, statement, parameters, context, executemany):
+            if statement.lstrip().upper().startswith('SELECT') and 'FROM transactions' in statement:
+                calls.append(statement)
+        event.listen(engine, 'before_cursor_execute', count_queries)
+        try:
+            report = client.get('/api/v1/reports/monthly?month=2026-01').json()
+        finally:
+            event.remove(engine, 'before_cursor_execute', count_queries)
+        assert len(calls) == 2
+        assert all('GROUP BY' in query for query in calls)
+        assert report['expense'] == '0.30' and report['balance'] == '0.70' and report['count'] == 3
+        assert report['trends'][0]['month'] == '2025-08'
+        assert report['previous']['expense'] == '5.00'
+        assert report['days'][-1] == {'date': '2026-01-31', 'income': '0.00', 'expense': '0.30'}
+        assert report['breakdown'] == [{'category_id': expense_category, 'amount': '0.30'}]
+        assert report['breakdown'] == client.get('/api/v1/reports/categories?month=2026-01').json()
+        data = {k: v for k, v in tx.items() if k != 'id'}
+        assert client.patch('/api/v1/transactions/' + tx['id'], headers=headers, json={**data, 'amount': '0.40'}).status_code == 200
+        assert client.get('/api/v1/reports/monthly?month=2026-01').json()['expense'] == '0.60'
+        assert client.delete('/api/v1/transactions/' + tx['id'], headers=headers).status_code == 204
+        assert client.get('/api/v1/reports/monthly?month=2026-01').json()['expense'] == '0.20'
+        empty = client.get('/api/v1/reports/monthly?month=2000-01').json()
+        assert empty['expense'] == '0.00' and empty['count'] == 0 and empty['breakdown'] == []
+
+def test_transaction_pagination_filters_and_stable_date_order():
+    with TestClient(app) as client:
+        headers = account(client)
+        for day in range(1, 13):
+            transaction(client, headers, date=f'2026-10-{day:02d}', description=f'Expense {day}')
+        first = client.get('/api/v1/transactions?month=2026-10&page_size=10').json()
+        second = client.get('/api/v1/transactions?month=2026-10&page_size=10&page=2').json()
+        assert first['total'] == 12 and len(first['items']) == 10 and len(second['items']) == 2
+        assert first['items'][0]['transaction_date'] == '2026-10-12'
+        assert not ({t['id'] for t in first['items']} & {t['id'] for t in second['items']})
+        assert client.get('/api/v1/transactions?month=2026-10&search=Expense%2012&type=EXPENSE').json()['total'] == 1

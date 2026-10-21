@@ -6,7 +6,6 @@ import time
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 from backend.app import engine, User, RecoveryToken, RateBucket, LoginSession, AuditEvent, digest
-from backend.google_auth import OAuthAttempt
 
 parser = argparse.ArgumentParser()
 parser.add_argument('command', choices=['recovery-token', 'cleanup'])
@@ -27,7 +26,6 @@ with Session(engine) as db:
         print(token)
     else:
         now = int(time.time())
-        db.execute(delete(OAuthAttempt).where(OAuthAttempt.expires < now))
         db.execute(delete(RateBucket).where(RateBucket.expires < now))
         db.execute(delete(RecoveryToken).where(RecoveryToken.expires < now))
         db.execute(delete(LoginSession).where((LoginSession.touched < now - 1800) | (LoginSession.created < now - 604800)))

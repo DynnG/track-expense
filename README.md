@@ -56,11 +56,11 @@ Tests use their own temporary database, never your development database. They co
 
 Read [docs/OPERATIONS.md](docs/OPERATIONS.md) before deployment. Production hosting, PostgreSQL credentials, HTTPS, storage encryption, backup scheduling, external monitoring alerts, and email delivery require your selected services. They are **not active merely because their code/configuration exists**. PostgreSQL integration and PostgreSQL backup restoration must be tested on the selected provider before release.
 
-`vercel.json` deploys the React frontend and FastAPI backend together using Vercel Services (currently beta). Both use the same HTTPS origin, with `/api` routed to FastAPI. Production requires a managed PostgreSQL database, `APP_ENV=production`, an exact HTTPS `FRONTEND_ORIGIN`, and completed Alembic migrations. Set secrets through the hosting service, never in Git. Google sign-in additionally requires the credentials documented below.
+`vercel.json` deploys the React frontend and FastAPI backend together using Vercel Services (currently beta). Both use the same HTTPS origin, with `/api` routed to FastAPI. Production requires a managed PostgreSQL database, `APP_ENV=production`, an exact HTTPS `FRONTEND_ORIGIN`, and completed Alembic migrations. Set secrets through the hosting service, never in Git.
 
 ## Mascot
 
 `public/assets/mascot-3d.png` is the transparent 3D-style image used in the dashboard. It is a raster image, not a GLB mesh. The original asset and generation prompt remain in `assets/`.
-# Google sign-in
+## Authentication
 
-Google login and explicit account linking are available once server credentials are configured. Follow [the Google setup guide](docs/GOOGLE_SIGN_IN.md). The client secret stays on the API server; Google sign-in is disabled until setup is complete.
+Email/password authentication is required. Google sign-in and linking have been retired; see [retirement and account recovery notes](docs/GOOGLE_SIGN_IN.md). Existing account and financial records are preserved.

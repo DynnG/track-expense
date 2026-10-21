@@ -136,7 +136,9 @@ if PRODUCTION:
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=[ORIGIN.split('/')[2]])
 
 def db():
-    with Session(engine) as session:
+    # Request-scoped objects remain valid after auth/rate-limit commits. Avoid
+    # re-reading the same session, user and saved transaction after each commit.
+    with Session(engine, expire_on_commit=False) as session:
         yield session
 
 def digest(value: str):
@@ -285,10 +287,6 @@ def new_session(session, user, response, old_token=''):
     response.set_cookie('track_session', token, httponly=True, secure=PRODUCTION, samesite='lax', max_age=604800, path='/')
     return profile(user, current)
 
-# Register provider routes after the shared authentication helpers are defined.
-from backend.google_auth import install_google_auth
-install_google_auth(app)
-
 @app.post('/api/v1/auth/register', status_code=201)
 def register(data: RegisterInput, request: Request, response: Response, session: Session = Depends(db)):
     throttle(session, 'register:' + request.client.host, 5, 3600)
@@ -378,7 +376,7 @@ def list_transactions(month: str, category_id: str = '', type: str = '', search:
     if not 1 <= page <= 100000 or not 1 <= page_size <= 100:
         raise HTTPException(422, 'Invalid pagination.')
     query = transactions_query(user, month, category_id, type, search)
-    total = session.scalar(select(func.count()).select_from(query.subquery()))
+    total = session.scalar(select(func.count()).select_from(query.order_by(None).subquery()))
     return {'items': [tx_json(t) for t in session.scalars(query.offset((page - 1) * page_size).limit(page_size))], 'total': total, 'page': page}
 
 def owned_transaction(session, user, id):
@@ -453,40 +451,40 @@ def remove_budget(id: str, user=Depends(auth), session: Session = Depends(db)):
     audit(session, user.id, 'budget_deleted')
     session.commit()
 
-def totals(session, user, month):
+def category_totals(session, user, month):
     start, end = month_bounds(month)
-    rows = session.scalars(select(Transaction).where(Transaction.user_id == user.id, Transaction.transaction_date >= start, Transaction.transaction_date < end)).all()
-    income = sum((t.amount for t in rows if t.type == 'INCOME'), Decimal('0.00'))
-    expense = sum((t.amount for t in rows if t.type == 'EXPENSE'), Decimal('0.00'))
-    return rows, income, expense
+    rows = session.execute(select(Transaction.category_id, func.sum(Transaction.amount)).where(Transaction.user_id == user.id, Transaction.type == 'EXPENSE', Transaction.transaction_date >= start, Transaction.transaction_date < end).group_by(Transaction.category_id).order_by(Transaction.category_id))
+    return [{'category_id': category, 'amount': str(amount)} for category, amount in rows]
 
 @app.get('/api/v1/reports/monthly')
 def monthly(month: str, user=Depends(auth), session: Session = Depends(db)):
     throttle(session, 'report:' + user.id, 30, 60)
-    rows, income, expense = totals(session, user, month)
-    by_day = {}
-    for t in rows:
-        key = t.transaction_date
-        day = by_day.setdefault(key, {'date': key, 'income': Decimal('0.00'), 'expense': Decimal('0.00')})
-        day['income' if t.type == 'INCOME' else 'expense'] += t.amount
+    _, end = month_bounds(month)
     selected = date.fromisoformat(month + '-01')
     trends = []
     for offset in range(5, -1, -1):
         index = selected.year * 12 + selected.month - 1 - offset
-        current = f'{index // 12:04d}-{index % 12 + 1:02d}'
-        _, inc, exp = totals(session, user, current)
-        trends.append({'month': current, 'income': str(inc), 'expense': str(exp)})
-    previous = trends[-2]
-    return {'income': str(income), 'expense': str(expense), 'balance': str(income - expense), 'count': len(rows), 'days': [{k: str(v) for k, v in d.items()} for d in sorted(by_day.values(), key=lambda d: d['date'])], 'trends': trends, 'previous': previous}
+        trends.append({'month': f'{index // 12:04d}-{index % 12 + 1:02d}', 'income': Decimal('0.00'), 'expense': Decimal('0.00')})
+    by_month = {t['month']: t for t in trends}
+    # Aggregate in SQL; transfer only day/type totals, never six months of ORM objects.
+    rows = session.execute(select(Transaction.transaction_date, Transaction.type, func.sum(Transaction.amount), func.count()).where(Transaction.user_id == user.id, Transaction.transaction_date >= trends[0]['month'] + '-01', Transaction.transaction_date < end).group_by(Transaction.transaction_date, Transaction.type).order_by(Transaction.transaction_date))
+    by_day = {}
+    count = 0
+    for key, kind, amount, number in rows:
+        field = 'income' if kind == 'INCOME' else 'expense'
+        by_month[key[:7]][field] += amount
+        if not key.startswith(month):
+            continue
+        count += number
+        day = by_day.setdefault(key, {'date': key, 'income': Decimal('0.00'), 'expense': Decimal('0.00')})
+        day[field] += amount
+    income, expense = trends[-1]['income'], trends[-1]['expense']
+    result_trends = [{k: str(v) for k, v in t.items()} for t in trends]
+    return {'income': str(income), 'expense': str(expense), 'balance': str(income - expense), 'count': count, 'days': [{k: str(v) for k, v in d.items()} for d in by_day.values()], 'trends': result_trends, 'previous': result_trends[-2], 'breakdown': category_totals(session, user, month)}
 
 @app.get('/api/v1/reports/categories')
 def category_report(month: str, user=Depends(auth), session: Session = Depends(db)):
-    rows, _, _ = totals(session, user, month)
-    amounts = {}
-    for t in rows:
-        if t.type == 'EXPENSE':
-            amounts[t.category_id] = amounts.get(t.category_id, Decimal('0.00')) + t.amount
-    return [{'category_id': key, 'amount': str(value)} for key, value in amounts.items()]
+    return category_totals(session, user, month)
 
 @app.get('/api/v1/reports/export')
 def export(month: str, user=Depends(auth), session: Session = Depends(db)):
