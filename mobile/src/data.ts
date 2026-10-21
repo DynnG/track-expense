@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './api';
 import { useSession } from './session';
-import { useIsFocused } from '@react-navigation/native';
+import { useIsFocused } from 'expo-router';
 import type { Budget, Category, Report } from '../../src/types';
 export type { Budget, Category, Report, Transaction } from '../../src/types';
 export function useSummary(month: string, needsBudgets = true, needsReport = true) {
@@ -21,3 +21,4 @@ export function useRefresh() {
     await query.invalidateQueries({ predicate: q => q.queryKey[1] === user?.id && keys.includes(String(q.queryKey[0])) });
   };
 }
+
