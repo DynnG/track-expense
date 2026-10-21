@@ -17,6 +17,7 @@ export function useRefresh() {
   const query = useQueryClient();
   const { user } = useSession();
   return async (kind?: 'transaction' | 'budget') => {
+    if (kind === 'transaction') query.removeQueries({ predicate: q => q.queryKey[0] === 'transaction' && q.queryKey[1] === user?.id });
     const keys = kind === 'transaction' ? ['report', 'transactions', 'recent'] : kind === 'budget' ? ['budgets'] : ['report', 'transactions', 'recent', 'categories', 'budgets'];
     await query.invalidateQueries({ predicate: q => q.queryKey[1] === user?.id && keys.includes(String(q.queryKey[0])) });
   };
