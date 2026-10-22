@@ -1,5 +1,13 @@
 # Track Expense for Android
 
+## Install the verified APK
+
+Build `fd91153f-3d59-4eee-a058-85071effce64` finished successfully for commit `998b7f5` (version 1.0.0, Android version code 1). Confirmed on 2026-10-22.
+
+[Download Android APK](https://expo.dev/artifacts/eas/5djeqp84j3oKBLytfS4ggsdSySogEtyeL-wy0R269lw.apk) · [Build and installation page](https://expo.dev/accounts/dynnn/projects/track-expense-mobile/builds/fd91153f-3d59-4eee-a058-85071effce64)
+
+Open the download link on your Android phone, open the downloaded APK, and choose Install. Allow installation from your browser/file manager if Android requests it. Sign in with your existing **Track Expense** email/password, not your Expo account. Expo artifacts have limited retention; rebuild with the commands below if the link expires. Physical-device installation remains to be verified on your phone.
+
 Separate Expo SDK 58 / React Native 0.88 app, with Expo Router tabs and TanStack Query. The existing React website stays at the repository root; FastAPI and the existing database serve both clients. Shared peso arithmetic and validation live in `../shared`. No second production database or sample financial records are created.
 
 ## Features
