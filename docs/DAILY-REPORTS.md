@@ -19,6 +19,7 @@ Daily summaries use two SQL aggregate queries, exact decimal money arithmetic an
 - 21 backend tests passed, including date isolation, owner isolation, decimal totals, leap/year boundaries, empty days, invalid dates, daily CSV filtering/escaping and transaction pagination.
 - 18 web/shared/mobile unit tests passed (temporary release copies excluded).
 - Mobile TypeScript and lint checks passed; Android Metro export succeeded.
+- The successful cloud build's Expo Doctor result was 19/20: its remaining warning recommends newer SDK 58 patch versions for eight existing Expo packages. This feature update retained the previously used dependency versions; no new native dependency was added.
 - The actual Expo screens were exercised via the browser renderer against an isolated test database: Today, Yesterday, earlier empty day, transaction editing, return to Reports, and refreshed totals/list.
 - Production health returned HTTP 200. Daily report and transaction routes returned HTTP 401 without a session.
 
