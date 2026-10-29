@@ -407,10 +407,15 @@ def transactions_query(user, month, category_id='', kind='', search=''):
     return query.order_by(Transaction.transaction_date.desc(), Transaction.created_at.desc(), Transaction.id)
 
 @app.get('/api/v1/transactions')
-def list_transactions(month: str, category_id: str = '', type: str = '', search: str = '', page: int = 1, page_size: int = 20, user=Depends(auth), session: Session = Depends(db)):
+def list_transactions(month: str, category_id: str = '', type: str = '', search: str = '', page: int = 1, page_size: int = 20, day: str | None = None, user=Depends(auth), session: Session = Depends(db)):
     if not 1 <= page <= 100000 or not 1 <= page_size <= 100:
         raise HTTPException(422, 'Invalid pagination.')
     query = transactions_query(user, month, category_id, type, search)
+    if day is not None:
+        report_day(day)
+        if day[:7] != month:
+            raise HTTPException(422, 'The report day must be in the selected month.')
+        query = query.where(Transaction.transaction_date == day)
     total = session.scalar(select(func.count()).select_from(query.order_by(None).subquery()))
     return {'items': [tx_json(t) for t in session.scalars(query.offset((page - 1) * page_size).limit(page_size))], 'total': total, 'page': page}
 

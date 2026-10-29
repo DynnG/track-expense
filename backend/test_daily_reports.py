@@ -33,6 +33,15 @@ def test_daily_totals_history_and_export_are_date_scoped_and_private():
         assert any(row[3] == "'=1+1" for row in rows[1:])
         assert a.get('/api/v1/reports/export?month=2026-01').status_code == 200
         assert b.get('/api/v1/reports/daily?day=2026-01-01').json()['expense'] == '444.00'
+        first_page = a.get('/api/v1/transactions?month=2026-01&day=2026-01-01&page_size=2').json()
+        assert first_page['total'] == 3 and len(first_page['items']) == 2
+        assert all(row['transaction_date'] == '2026-01-01' for row in first_page['items'])
+        second_page = a.get('/api/v1/transactions?month=2026-01&day=2026-01-01&page_size=2&page=2').json()
+        assert len(second_page['items']) == 1
+        assert not ({row['id'] for row in first_page['items']} & {row['id'] for row in second_page['items']})
+        assert a.get('/api/v1/transactions?month=2026-01&day=2025-12-31').status_code == 422
+        assert a.get('/api/v1/transactions?month=2026-02&day=2026-02-29').status_code == 422
+        assert a.get('/api/v1/transactions?month=2026-01&day=2026-01-03').json()['total'] == 0
 
 
 def test_daily_empty_dates_validation_and_authentication():
