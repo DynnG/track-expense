@@ -6,3 +6,4 @@ export type Profile = { id: string; name: string; email: string; csrf: string };
 export type Trend = { month: string; income: string; expense: string };
 export type Report = { income: string; expense: string; balance: string; count: number; breakdown: { category_id: string; amount: string }[]; trends: Trend[]; previous: Trend; days: { date: string; income: string; expense: string }[] };
 export type Page = 'dashboard' | 'transactions' | 'budgets' | 'reports' | 'settings';
+export type DailyReport = Pick<Report, 'income' | 'expense' | 'balance' | 'count' | 'breakdown' | 'days'> & { date: string; previous: { date: string; income: string; expense: string } };

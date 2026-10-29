@@ -491,6 +491,31 @@ def category_totals(session, user, month):
     rows = session.execute(select(Transaction.category_id, func.sum(Transaction.amount)).where(Transaction.user_id == user.id, Transaction.type == 'EXPENSE', Transaction.transaction_date >= start, Transaction.transaction_date < end).group_by(Transaction.category_id).order_by(Transaction.category_id))
     return [{'category_id': category, 'amount': str(amount)} for category, amount in rows]
 
+def report_day(value: str):
+    try:
+        if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', value):
+            raise ValueError()
+        selected = date.fromisoformat(value)
+        if not 2000 <= selected.year <= 2100:
+            raise ValueError()
+        return selected
+    except ValueError:
+        raise HTTPException(422, 'Choose a valid report date from 2000 through 2100.')
+
+@app.get('/api/v1/reports/daily')
+def daily(day: str, user=Depends(auth), session: Session = Depends(db)):
+    throttle(session, 'report:' + user.id, 30, 60)
+    selected = report_day(day)
+    days = {(selected - timedelta(days=offset)).isoformat(): {'income': Decimal('0.00'), 'expense': Decimal('0.00'), 'count': 0} for offset in range(6, -1, -1)}
+    rows = session.execute(select(Transaction.transaction_date, Transaction.type, func.sum(Transaction.amount), func.count()).where(Transaction.user_id == user.id, Transaction.transaction_date >= next(iter(days)), Transaction.transaction_date <= day).group_by(Transaction.transaction_date, Transaction.type))
+    for key, kind, amount, count in rows:
+        days[key]['income' if kind == 'INCOME' else 'expense'] += amount
+        days[key]['count'] += count
+    current = days[day]
+    previous_day = (selected - timedelta(days=1)).isoformat()
+    categories = session.execute(select(Transaction.category_id, func.sum(Transaction.amount)).where(Transaction.user_id == user.id, Transaction.type == 'EXPENSE', Transaction.transaction_date == day).group_by(Transaction.category_id).order_by(Transaction.category_id))
+    return {'date': day, 'income': str(current['income']), 'expense': str(current['expense']), 'balance': str(current['income'] - current['expense']), 'count': current['count'], 'previous': {'date': previous_day, 'income': str(days[previous_day]['income']), 'expense': str(days[previous_day]['expense'])}, 'days': [{'date': key, 'income': str(value['income']), 'expense': str(value['expense'])} for key, value in days.items()], 'breakdown': [{'category_id': key, 'amount': str(amount)} for key, amount in categories]}
+
 @app.get('/api/v1/reports/monthly')
 def monthly(month: str, user=Depends(auth), session: Session = Depends(db)):
     throttle(session, 'report:' + user.id, 30, 60)
@@ -522,9 +547,16 @@ def category_report(month: str, user=Depends(auth), session: Session = Depends(d
     return category_totals(session, user, month)
 
 @app.get('/api/v1/reports/export')
-def export(month: str, user=Depends(auth), session: Session = Depends(db)):
+def export(month: str | None = None, day: str | None = None, user=Depends(auth), session: Session = Depends(db)):
     throttle(session, 'report:' + user.id, 30, 60)
-    rows = session.scalars(transactions_query(user, month)).all()
+    if (month is None) == (day is None):
+        raise HTTPException(422, 'Choose either a report day or month.')
+    if day is not None:
+        report_day(day)
+        query = transactions_query(user, day[:7]).where(Transaction.transaction_date == day)
+    else:
+        query = transactions_query(user, month)
+    rows = session.scalars(query).all()
     names = {c.id: c.name for c in session.scalars(select(Category).where(Category.user_id == user.id))}
     buffer = io.StringIO()
     writer = csv.writer(buffer)
@@ -535,7 +567,7 @@ def export(month: str, user=Depends(auth), session: Session = Depends(db)):
         writer.writerow([t.transaction_date, t.type, names[t.category_id], description, str(t.amount)])
     audit(session, user.id, 'report_exported')
     session.commit()
-    return Response('\ufeff' + buffer.getvalue(), media_type='text/csv', headers={'Content-Disposition': f'attachment; filename="track-expense-{month}.csv"'})
+    return Response('\ufeff' + buffer.getvalue(), media_type='text/csv', headers={'Content-Disposition': f'attachment; filename="track-expense-{day if day is not None else month}.csv"'})
 
 @app.get('/api/v1/health/live')
 def live():

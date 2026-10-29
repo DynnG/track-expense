@@ -35,9 +35,9 @@ async function request<T>(path: string, options: RequestInit, read: (response: R
     throw new ApiError('We couldn’t connect. Check your connection and try again.', 0);
   }
 }
-export async function downloadReport(month: string) {
-  const blob = await request(`/reports/export?month=${month}`, {}, response => response.blob());
-  saveBlob(blob, `track-expense-${month}.csv`);
+export async function downloadReport(day: string) {
+  const blob = await request(`/reports/export?day=${encodeURIComponent(day)}`, {}, response => response.blob());
+  saveBlob(blob, `track-expense-${day}.csv`);
 }
 export function saveBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
