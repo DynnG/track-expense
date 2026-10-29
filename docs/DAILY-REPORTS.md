@@ -23,3 +23,7 @@ Daily summaries use two SQL aggregate queries, exact decimal money arithmetic an
 - Production health returned HTTP 200. Daily report and transaction routes returned HTTP 401 without a session.
 
 APK installation and the native Android calendar UI still require a physical-phone smoke test. Build/download status is recorded in the mobile README only after EAS confirms success. Install the update over the existing app; do not uninstall first.
+
+## Android delivery
+
+Expo completed version **1.0.2**, Android build **3**, on 2026-10-29. [Download APK](https://expo.dev/artifacts/eas/9tXnoSLEyNNO5Yu73btsrmLecu72wbhlY9nEXZvRnVk.apk) · [Successful build](https://expo.dev/accounts/dynnn/projects/track-expense-mobile/builds/1acc294f-a4c0-440c-bfe0-d34d3710c8fa). The existing signing key and package were reused. Update the installed app without uninstalling, then open **Reports → Yesterday**. The native build includes the pre-existing released UI/session fixes present in the workspace. The daily API and day-filtered transaction API are live on the existing production backend.

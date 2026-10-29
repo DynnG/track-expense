@@ -2,21 +2,25 @@
 
 ## Install the verified APK
 
-Build `fd91153f-3d59-4eee-a058-85071effce64` finished successfully for commit `998b7f5` (version 1.0.0, Android version code 1). Confirmed on 2026-10-22.
+Version **1.0.2**, Android build **3**, completed successfully on **2026-10-29**. Build ID: `1acc294f-a4c0-440c-bfe0-d34d3710c8fa`. This build adds daily reports and preserves the previously released UI/session fixes, using the same Android signing key and package `com.dynng.trackexpense`.
 
-[Download Android APK](https://expo.dev/artifacts/eas/5djeqp84j3oKBLytfS4ggsdSySogEtyeL-wy0R269lw.apk) · [Build and installation page](https://expo.dev/accounts/dynnn/projects/track-expense-mobile/builds/fd91153f-3d59-4eee-a058-85071effce64)
+[Download Android APK](https://expo.dev/artifacts/eas/9tXnoSLEyNNO5Yu73btsrmLecu72wbhlY9nEXZvRnVk.apk) · [Build and installation page](https://expo.dev/accounts/dynnn/projects/track-expense-mobile/builds/1acc294f-a4c0-440c-bfe0-d34d3710c8fa)
 
-Open the download link on your Android phone, open the downloaded APK, and choose Install. Allow installation from your browser/file manager if Android requests it. Sign in with your existing **Track Expense** email/password, not your Expo account. Expo artifacts have limited retention; rebuild with the commands below if the link expires. Physical-device installation remains to be verified on your phone.
+Open the download link on your Android phone, open the APK, and choose Update/Install over the existing app. Do not uninstall first. Allow installation from your browser/file manager if Android requests it. Sign in with your existing Track Expense email/password, not your Expo account. Physical-device installation and restart behavior still need verification on your phone.
+
+The corresponding backend session fix was deployed to [the production API](https://track-expense-seven.vercel.app) on 2026-10-28. Vercel deployment `dpl_BeX2f9q3uPKpFR4nXCcwDgG6JFsc` reached READY; the public website returned HTTP 200 and the mobile session endpoint returned HTTP 401 without credentials. No database migration or production test records were created.
 
 Separate Expo SDK 58 / React Native 0.88 app, with Expo Router tabs and TanStack Query. The existing React website stays at the repository root; FastAPI and the existing database serve both clients. Shared peso arithmetic and validation live in `../shared`. No second production database or sample financial records are created.
 
 ## Features
 
+Open **Reports → Yesterday** to review the previous day’s expenses. Reports starts on Today, using Philippine time; monthly budget and dashboard calculations remain available. See [daily-report behavior and verification](../docs/DAILY-REPORTS.md).
+
 - Home: monthly income, expenses, balance, budget remaining, categories and recent transactions.
 - History: paginated native list, month/category/type filters, debounced search, newest first.
-- Add/edit/delete transactions with peso validation, native date/category controls, retained inputs on failure and explicit delete confirmation.
+- Add/edit/delete transactions with peso validation, native date controls and labeled category selection dialogs, retained inputs on failure and explicit delete confirmation.
 - Overall/category budgets, usage, remaining amounts and create/edit/delete.
-- Monthly reports, category bars and six-month trends.
+- Daily reports with Today/Yesterday shortcuts, native calendar selection, dated transaction lists, category breakdowns and seven-day trends.
 - Email/password sign-in and registration, protected screens, safe areas, keyboard-aware forms, offline notice, retry and pull-to-refresh.
 
 All screens use real API responses. Mutations refresh affected query caches; returning to the foreground refreshes active data. There is no background polling or offline write queue. A connection is required to save. Failed saves retain the current form, and success appears only after server confirmation.
@@ -60,7 +64,7 @@ Store listing, Google Play account setup and publication are separate steps. No 
 
 ## API and security
 
-Native sign-in/register/me/logout use `/api/v1/mobile/auth/*`; all financial CRUD and reports reuse the web endpoints and ownership checks. Sessions expire after 30 minutes idle or seven days absolute. Native tokens use a separate hash namespace, cannot replace web cookies, and are stored only in Expo SecureStore on Android/iOS. Browser previews keep tokens in memory. Passwords and financial query caches are not persisted to disk. Logout revokes the current session; password reset revokes all sessions. Existing web cookie/Origin/CSRF protections remain enforced. APK/store builds reject missing, non-HTTPS or non-origin API URLs. The API address is public configuration, never a database secret.
+Native sign-in/register/me/logout use `/api/v1/mobile/auth/*`; all financial CRUD and reports reuse the web endpoints and ownership checks. Native sessions expire after 30 days idle or 180 days absolute, with server validation on startup and foreground return. This requires deploying the updated backend as well as installing the updated app. The website retains its existing 30-minute idle / seven-day maximum policy. The cleanup command uses the longest session retention because existing session hashes do not identify their transport; web expiry is still enforced on each request. Native tokens use a separate hash namespace, cannot replace web cookies, and are stored only in Expo SecureStore on Android/iOS. Browser previews keep tokens in memory. Passwords and financial query caches are not persisted to disk. Logout revokes the current session; password reset revokes all sessions. Existing web cookie/Origin/CSRF protections remain enforced. APK/store builds reject missing, non-HTTPS or non-origin API URLs. The API address is public configuration, never a database secret.
 
 ## Verification
 
